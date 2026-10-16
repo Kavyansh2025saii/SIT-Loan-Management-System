@@ -1,0 +1,91 @@
+package com.sit.loan.util;
+
+import java.util.Scanner;
+import java.util.function.Predicate;
+
+/** All console input goes through one Scanner. */
+public final class Input {
+    private static final Scanner SC = new Scanner(System.in);
+
+    private Input() {}
+
+    /** Thrown when stdin is closed, so the app can exit cleanly. */
+    public static class InputClosedException extends RuntimeException {
+        private static final long serialVersionUID = 1L;
+        public InputClosedException() { super("Input closed"); }
+    }
+
+    public static String line(String prompt) {
+        System.out.print(prompt);
+        if (!SC.hasNextLine()) throw new InputClosedException();
+        return SC.nextLine().trim();
+    }
+
+    public static String required(String prompt) {
+        while (true) {
+            String s = line(prompt);
+            if (!s.isEmpty()) return s;
+            System.out.println("  This field is required.");
+        }
+    }
+
+    public static String validated(String prompt, Predicate<String> ok, String error) {
+        while (true) {
+            String s = line(prompt);
+            if (s.isEmpty()) { System.out.println("  This field is required."); continue; }
+            if (ok.test(s)) return s;
+            System.out.println("  " + error);
+        }
+    }
+
+    /** Optional field: blank keeps the current value. */
+    public static String optionalValidated(String prompt, Predicate<String> ok, String error) {
+        while (true) {
+            String s = line(prompt);
+            if (s.isEmpty() || ok.test(s)) return s;
+            System.out.println("  " + error);
+        }
+    }
+
+    public static int choice(String prompt, int min, int max) {
+        while (true) {
+            String s = line(prompt);
+            try {
+                int n = Integer.parseInt(s);
+                if (n >= min && n <= max) return n;
+            } catch (NumberFormatException ignored) { }
+            System.out.println("  Please enter a number between " + min + " and " + max + ".");
+        }
+    }
+
+    public static double positiveDouble(String prompt, String fieldName) {
+        while (true) {
+            String s = line(prompt);
+            try {
+                double d = Double.parseDouble(s);
+                if (d > 0 && !Double.isInfinite(d)) return d;
+            } catch (NumberFormatException ignored) { }
+            System.out.println("  " + fieldName + " must be a positive number.");
+        }
+    }
+
+    public static int positiveInt(String prompt, String fieldName) {
+        while (true) {
+            String s = line(prompt);
+            try {
+                int n = Integer.parseInt(s);
+                if (n > 0) return n;
+            } catch (NumberFormatException ignored) { }
+            System.out.println("  " + fieldName + " must be a whole number greater than 0.");
+        }
+    }
+
+    public static boolean confirm(String prompt) {
+        while (true) {
+            String s = line(prompt + " (yes/no): ").toLowerCase();
+            if (s.equals("yes") || s.equals("y")) return true;
+            if (s.equals("no") || s.equals("n")) return false;
+            System.out.println("  Please type yes or no.");
+        }
+    }
+}
