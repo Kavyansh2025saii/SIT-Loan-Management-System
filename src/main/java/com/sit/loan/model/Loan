@@ -1,0 +1,30 @@
+package com.sit.loan.model;
+
+import java.sql.Timestamp;
+
+public class Loan {
+    public static final String PENDING = "Pending";
+    public static final String APPROVED = "Approved";
+    public static final String REJECTED = "Rejected";
+    public static final String NEEDS_INFO = "Needs More Info";
+
+    public int loanId;
+    public int userId;
+    public double loanAmount;
+    public String loanType;
+    public int loanDuration;          // months
+    public double interestRate;       // % per annum
+    public double annualIncome;
+    public String purpose;
+    public String status = PENDING;
+    public Timestamp applicationDate;
+    public String remarks;            // rejection reason / info requested
+    public Double emiAmount;
+    public Double totalInterest;
+    public Double totalPayable;
+
+    // joined user info (for admin views)
+    public String userFullName;
+    public String userEmail;
+    public String userMobile;
+}
