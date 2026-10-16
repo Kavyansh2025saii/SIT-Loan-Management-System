@@ -1,0 +1,310 @@
+package com.sit.loan.ui;
+
+import com.sit.loan.dao.AuditDao;
+import com.sit.loan.dao.LoanDao;
+import com.sit.loan.dao.UserDao;
+import com.sit.loan.model.Loan;
+import com.sit.loan.model.User;
+import com.sit.loan.service.EmailService;
+import com.sit.loan.service.EmiCalculator;
+import com.sit.loan.util.Input;
+import com.sit.loan.util.Validator;
+
+import java.sql.SQLException;
+import java.util.List;
+
+/** Admin dashboard. Only reachable after a successful ROLE_ADMIN login. */
+public class AdminSession {
+    private static final String SUBJECT = "Account Update Notification";
+
+    private final UserDao userDao;
+    private final LoanDao loanDao;
+    private final AuditDao auditDao;
+    private final EmailService email;
+
+    public AdminSession(UserDao userDao, LoanDao loanDao, AuditDao auditDao, EmailService email) {
+        this.userDao = userDao;
+        this.loanDao = loanDao;
+        this.auditDao = auditDao;
+        this.email = email;
+    }
+
+    public void run(User admin) {
+        // role-based access control: refuse anyone who is not ROLE_ADMIN
+        if (admin == null || !admin.isAdmin()) {
+            System.out.println("Access denied. Admin role required.");
+            return;
+        }
+        while (true) {
+            System.out.println("\n----- ADMIN DASHBOARD -----");
+            System.out.println("1. Search Users");
+            System.out.println("2. View User Details");
+            System.out.println("3. Edit User Information");
+            System.out.println("4. Activate User");
+            System.out.println("5. Deactivate User");
+            System.out.println("6. Delete User");
+            System.out.println("7. View All Loan Applications");
+            System.out.println("8. Review Loan (Approve / Reject / Request Info)");
+            System.out.println("9. Logout");
+            int choice = Input.choice("Enter choice: ", 1, 9);
+            try {
+                switch (choice) {
+                    case 1: searchUsers(); break;
+                    case 2: viewUser(); break;
+                    case 3: editUser(admin); break;
+                    case 4: changeStatus(admin, User.ACTIVE); break;
+                    case 5: changeStatus(admin, User.INACTIVE); break;
+                    case 6: deleteUser(admin); break;
+                    case 7: listLoans(); break;
+                    case 8: reviewLoan(admin); break;
+                    default:
+                        System.out.println("Admin logged out.");
+                        return;
+                }
+            } catch (SQLException e) {
+                System.out.println("[ERROR] Database problem: " + e.getMessage());
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- helpers
+    /** Asks for a user id and returns a non-admin user, or null (with a message). */
+    private User pickUser(boolean allowAdminTarget) throws SQLException {
+        int id = Input.positiveInt("Enter user ID: ", "User ID");
+        User u = userDao.findById(id);
+        if (u == null) {
+            System.out.println("No user found with ID " + id + ".");
+            return null;
+        }
+        if (u.isAdmin() && !allowAdminTarget) {
+            System.out.println("This action is not allowed on admin accounts.");
+            return null;
+        }
+        return u;
+    }
+
+    private void printUserRow(List<User> users) {
+        System.out.printf("%n%-5s %-12s %-12s %-12s %-28s %-14s %-9s %s%n",
+                "ID", "First", "Last", "Mobile", "Email", "Username", "Status", "Role");
+        for (User u : users) {
+            System.out.printf("%-5d %-12s %-12s %-12s %-28s %-14s %-9s %s%n",
+                    u.id, u.fname, u.lname, u.mobile, u.email, u.username, u.status, u.role);
+        }
+    }
+
+    // ---------------------------------------------------------------- 3.1 search
+    private void searchUsers() throws SQLException {
+        System.out.println("Search by: 1.First Name 2.Last Name 3.Email 4.Mobile 5.Username 6.Status");
+        int c = Input.choice("Enter choice: ", 1, 6);
+        String[] fields = {"fname", "lname", "email", "mobile", "username", "status"};
+        String value;
+        if (c == 6) {
+            System.out.println("Status: 1.Active 2.Inactive");
+            value = Input.choice("Enter choice: ", 1, 2) == 1 ? User.ACTIVE : User.INACTIVE;
+        } else {
+            value = Input.required("Search text: ");
+        }
+        List<User> found = userDao.search(fields[c - 1], value);
+        if (found.isEmpty()) System.out.println("No users found.");
+        else printUserRow(found);
+    }
+
+    // ---------------------------------------------------------------- 3.2 details
+    private void viewUser() throws SQLException {
+        User u = pickUser(true);
+        if (u == null) return;
+        System.out.println("\n----- USER DETAILS -----");
+        System.out.println("ID         : " + u.id);
+        System.out.println("Full name  : " + u.fullName());
+        System.out.println("Email      : " + u.email);
+        System.out.println("Mobile     : " + u.mobile);
+        System.out.println("Location   : " + u.location);
+        System.out.println("Username   : " + u.username);
+        System.out.println("Role       : " + u.role);
+        System.out.println("Status     : " + u.status);
+        System.out.println("PAN        : " + (u.panCard == null ? "-" : u.panCard));
+        System.out.println("CIBIL score: " + (u.cibilScore == null ? "-" : u.cibilScore));
+        List<Loan> loans = loanDao.findByUser(u.id);
+        if (loans.isEmpty()) {
+            System.out.println("Loan applications: none");
+        } else {
+            System.out.println("Loan applications:");
+            for (Loan l : loans) {
+                System.out.printf("  #%d  %-14s %,.2f  %d months  %.2f%%  %s%n",
+                        l.loanId, l.loanType, l.loanAmount, l.loanDuration, l.interestRate, l.status);
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- edit
+    private void editUser(User admin) throws SQLException {
+        User u = pickUser(false);
+        if (u == null) return;
+        System.out.println("Press Enter to keep the current value.");
+        String v;
+        v = Input.optionalValidated("First name [" + u.fname + "]: ", Validator::isName, "First name must contain only letters.");
+        if (!v.isEmpty()) u.fname = v;
+        v = Input.optionalValidated("Last name [" + u.lname + "]: ", Validator::isName, "Last name must contain only letters.");
+        if (!v.isEmpty()) u.lname = v;
+        v = Input.optionalValidated("Mobile [" + u.mobile + "]: ", Validator::isMobile, "Mobile number must be exactly 10 digits.");
+        if (!v.isEmpty()) u.mobile = v;
+        while (true) {
+            v = Input.optionalValidated("Email [" + u.email + "]: ", Validator::isEmail, "Invalid email format.");
+            if (v.isEmpty()) break;
+            if (userDao.emailExists(v, u.id)) { System.out.println("  That email is already used by another account."); continue; }
+            u.email = v;
+            break;
+        }
+        v = Input.line("Location [" + u.location + "]: ");
+        if (!v.isEmpty()) u.location = v;
+
+        userDao.updateDetails(u);
+        System.out.println("User details updated.");
+        auditDao.log("EDIT_USER", admin.username, u.id, u.username, "Details edited by admin");
+        email.send(u.email, SUBJECT, "Dear " + u.fname
+                + ", your account details have been updated. If you did not request this change, please contact support immediately.");
+    }
+
+    // ---------------------------------------------------------------- activate / deactivate
+    private void changeStatus(User admin, String newStatus) throws SQLException {
+        User u = pickUser(false);
+        if (u == null) return;
+        if (u.status.equalsIgnoreCase(newStatus)) {
+            System.out.println("User is already " + newStatus + ".");
+            return;
+        }
+        userDao.updateStatus(u.id, newStatus);
+        boolean activate = User.ACTIVE.equals(newStatus);
+        System.out.println("User " + u.username + " is now " + newStatus + ".");
+        auditDao.log(activate ? "ACTIVATE_USER" : "DEACTIVATE_USER", admin.username, u.id, u.username, null);
+        String body = activate
+                ? "Dear " + u.fname + ", your account has been successfully activated by the admin. You can now log in to the system."
+                : "Dear " + u.fname + ", your account has been deactivated. Please contact support for more information.";
+        email.send(u.email, SUBJECT, body);
+    }
+
+    // ---------------------------------------------------------------- delete
+    private void deleteUser(User admin) throws SQLException {
+        User u = pickUser(false);
+        if (u == null) return;
+        System.out.println("About to delete: " + u.fullName() + " (" + u.username + ", " + u.email + ")");
+        System.out.println("This also deletes all of this user's loan applications.");
+        if (!Input.confirm("Are you sure you want to delete this user?")) {
+            System.out.println("Deletion cancelled.");
+            return;
+        }
+        userDao.delete(u.id);
+        System.out.println("User deleted.");
+        auditDao.log("DELETE_USER", admin.username, u.id, u.username,
+                "Deleted " + u.fullName() + " <" + u.email + ">");
+        System.out.println("[AUDIT] " + admin.username + " deleted user #" + u.id + " (" + u.username + ")");
+        email.send(u.email, SUBJECT, "Dear " + u.fname
+                + ", your account has been deleted from the system. If this was a mistake, please contact support immediately.");
+    }
+
+    // ---------------------------------------------------------------- loans
+    private void listLoans() throws SQLException {
+        List<Loan> loans = loanDao.findAll();
+        if (loans.isEmpty()) {
+            System.out.println("No loan applications yet.");
+            return;
+        }
+        System.out.printf("%n%-7s %-22s %-14s %-16s %-12s %s%n",
+                "LoanID", "Applicant", "Amount", "Type", "Applied on", "Status");
+        for (Loan l : loans) {
+            System.out.printf("%-7d %-22s %-14.2f %-16s %-12s %s%n", l.loanId, l.userFullName, l.loanAmount,
+                    l.loanType, String.valueOf(l.applicationDate).substring(0, 10), l.status);
+        }
+    }
+
+    private void printLoanDetails(Loan l) {
+        System.out.println("\n----- LOAN DETAILS -----");
+        System.out.println("Loan ID       : " + l.loanId);
+        System.out.println("Applicant     : " + l.userFullName);
+        System.out.println("Email         : " + l.userEmail);
+        System.out.println("Mobile        : " + l.userMobile);
+        System.out.printf("Loan amount   : %,.2f%n", l.loanAmount);
+        System.out.println("Loan type     : " + l.loanType);
+        System.out.println("Duration      : " + l.loanDuration + " months");
+        System.out.printf("Interest rate : %.2f%% p.a.%n", l.interestRate);
+        System.out.printf("Annual income : %,.2f%n", l.annualIncome);
+        System.out.println("Purpose       : " + l.purpose);
+        System.out.println("Applied on    : " + l.applicationDate);
+        System.out.println("Status        : " + l.status);
+        if (l.remarks != null && !l.remarks.isEmpty()) System.out.println("Remarks       : " + l.remarks);
+        if (l.emiAmount != null) {
+            System.out.printf("Monthly EMI   : %,.2f%n", l.emiAmount);
+            System.out.printf("Total interest: %,.2f%n", l.totalInterest);
+            System.out.printf("Total payable : %,.2f%n", l.totalPayable);
+        }
+    }
+
+    private void reviewLoan(User admin) throws SQLException {
+        listLoans();
+        if (loanDao.findAll().isEmpty()) return;
+        int id = Input.positiveInt("Enter Loan ID to review: ", "Loan ID");
+        Loan l = loanDao.findById(id);
+        if (l == null) {
+            System.out.println("No loan found with ID " + id + ".");
+            return;
+        }
+        printLoanDetails(l);
+        boolean decided = Loan.APPROVED.equals(l.status) || Loan.REJECTED.equals(l.status);
+        if (decided) {
+            System.out.println("\nThis loan has already been " + l.status.toLowerCase() + ". No further action possible.");
+            return;
+        }
+        System.out.println("\n1. Approve  2. Reject  3. Request more info  4. Back");
+        switch (Input.choice("Enter choice: ", 1, 4)) {
+            case 1: approve(admin, l); break;
+            case 2: reject(admin, l); break;
+            case 3: requestInfo(admin, l); break;
+            default: break;
+        }
+    }
+
+    private void approve(User admin, Loan l) throws SQLException {
+        EmiCalculator.Result r = EmiCalculator.calculate(l.loanAmount, l.interestRate, l.loanDuration);
+        loanDao.approve(l.loanId, r.emi, r.totalInterest, r.totalPayable);
+        System.out.println("Loan #" + l.loanId + " approved.");
+        System.out.printf("EMI: %,.2f | Total interest: %,.2f | Total payable: %,.2f%n", r.emi, r.totalInterest, r.totalPayable);
+        auditDao.log("APPROVE_LOAN", admin.username, l.userId, null, "Loan #" + l.loanId);
+
+        String name = l.userFullName.split(" ")[0];
+        String body = "Dear " + name + ", your loan application for " + String.format("%,.2f", l.loanAmount)
+                + " has been approved.\n\n"
+                + "Loan details\n"
+                + "-------------------------------\n"
+                + "Sanctioned Loan Amount : " + String.format("%,.2f", l.loanAmount) + "\n"
+                + "Loan Type              : " + l.loanType + "\n"
+                + "Loan Tenure            : " + l.loanDuration + " months\n"
+                + "Applied Interest Rate  : " + String.format("%.2f", l.interestRate) + "% p.a.\n"
+                + "Monthly EMI Amount     : " + String.format("%,.2f", r.emi) + "\n"
+                + "Total Interest Amount  : " + String.format("%,.2f", r.totalInterest) + "\n"
+                + "Total Payable Amount   : " + String.format("%,.2f", r.totalPayable) + "\n\n"
+                + "Please check your dashboard for further details.\n\nRegards,\nLoan Application Team";
+        email.send(l.userEmail, "Your Loan Application has been Approved!", body);
+    }
+
+    private void reject(User admin, Loan l) throws SQLException {
+        String reason = Input.required("Reason for rejection: ");
+        loanDao.updateStatus(l.loanId, Loan.REJECTED, reason);
+        System.out.println("Loan #" + l.loanId + " rejected.");
+        auditDao.log("REJECT_LOAN", admin.username, l.userId, null, "Loan #" + l.loanId + ": " + reason);
+        String name = l.userFullName.split(" ")[0];
+        email.send(l.userEmail, "Your Loan Application has been Rejected",
+                "Dear " + name + ", we regret to inform you that your loan application has been rejected. Reason: "
+                        + reason + ". Please contact support for more details.");
+    }
+
+    private void requestInfo(User admin, Loan l) throws SQLException {
+        String msg = Input.required("What additional information is needed? ");
+        loanDao.updateStatus(l.loanId, Loan.NEEDS_INFO, msg);
+        System.out.println("Loan #" + l.loanId + " marked as 'Needs More Info'.");
+        auditDao.log("REQUEST_INFO", admin.username, l.userId, null, "Loan #" + l.loanId + ": " + msg);
+        String name = l.userFullName.split(" ")[0];
+        email.send(l.userEmail, "More information needed for your Loan Application",
+                "Dear " + name + ", we need some more information to process your loan application #" + l.loanId
+                        + ": " + msg + ". Please contact support to provide it.");
+    }
+}
