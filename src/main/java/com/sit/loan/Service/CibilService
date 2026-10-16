@@ -1,0 +1,27 @@
+package com.sit.loan.service;
+
+import com.sit.loan.model.LoanType;
+
+import java.security.SecureRandom;
+
+public class CibilService {
+    public static final int MIN_SCORE = 600;
+    public static final int MAX_SCORE = 900;
+    private static final SecureRandom RANDOM = new SecureRandom();
+
+    /** Random score in [600, 900]. */
+    public int generateScore() {
+        return MIN_SCORE + RANDOM.nextInt(MAX_SCORE - MIN_SCORE + 1);
+    }
+
+    /**
+     * Linear mapping inside the loan type's range: a score of 900 gets the lowest rate,
+     * a score of 600 gets the highest rate. Rounded to 2 decimals.
+     */
+    public double interestRate(LoanType type, int cibilScore) {
+        int s = Math.max(MIN_SCORE, Math.min(MAX_SCORE, cibilScore));
+        double fraction = (double) (MAX_SCORE - s) / (MAX_SCORE - MIN_SCORE); // 0 (best) .. 1 (worst)
+        double rate = type.minRate + fraction * (type.maxRate - type.minRate);
+        return Math.round(rate * 100.0) / 100.0;
+    }
+}
