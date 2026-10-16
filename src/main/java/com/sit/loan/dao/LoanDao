@@ -1,0 +1,118 @@
+package com.sit.loan.dao;
+
+import com.sit.loan.model.Loan;
+import com.sit.loan.util.DBConnection;
+
+import java.sql.*;
+import java.util.ArrayList;
+import java.util.List;
+
+public class LoanDao {
+
+    private static final String SELECT_JOINED =
+            "SELECT l.*, CONCAT(u.fname,' ',u.lname) AS full_name, u.email AS u_email, u.mobile AS u_mobile "
+                    + "FROM loans l JOIN users u ON u.id = l.user_id ";
+
+    private static Loan map(ResultSet rs) throws SQLException {
+        Loan l = new Loan();
+        l.loanId = rs.getInt("loan_id");
+        l.userId = rs.getInt("user_id");
+        l.loanAmount = rs.getDouble("loan_amount");
+        l.loanType = rs.getString("loan_type");
+        l.loanDuration = rs.getInt("loan_duration");
+        l.interestRate = rs.getDouble("interest_rate");
+        l.annualIncome = rs.getDouble("annual_income");
+        l.purpose = rs.getString("purpose");
+        l.status = rs.getString("status");
+        l.applicationDate = rs.getTimestamp("application_date");
+        l.remarks = rs.getString("remarks");
+        double emi = rs.getDouble("emi_amount");
+        l.emiAmount = rs.wasNull() ? null : emi;
+        double ti = rs.getDouble("total_interest");
+        l.totalInterest = rs.wasNull() ? null : ti;
+        double tp = rs.getDouble("total_payable");
+        l.totalPayable = rs.wasNull() ? null : tp;
+        try {
+            l.userFullName = rs.getString("full_name");
+            l.userEmail = rs.getString("u_email");
+            l.userMobile = rs.getString("u_mobile");
+        } catch (SQLException ignored) { /* query without the join */ }
+        return l;
+    }
+
+    public int insert(Loan l) throws SQLException {
+        String sql = "INSERT INTO loans (user_id, loan_amount, loan_type, loan_duration, interest_rate, annual_income, "
+                + "purpose, status, application_date) VALUES (?,?,?,?,?,?,?,?,?)";
+        try (Connection c = DBConnection.get();
+             PreparedStatement ps = c.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS)) {
+            ps.setInt(1, l.userId);
+            ps.setDouble(2, l.loanAmount);
+            ps.setString(3, l.loanType);
+            ps.setInt(4, l.loanDuration);
+            ps.setDouble(5, l.interestRate);
+            ps.setDouble(6, l.annualIncome);
+            ps.setString(7, l.purpose);
+            ps.setString(8, Loan.PENDING);
+            ps.setTimestamp(9, new Timestamp(System.currentTimeMillis()));
+            ps.executeUpdate();
+            try (ResultSet keys = ps.getGeneratedKeys()) {
+                if (keys.next()) l.loanId = keys.getInt(1);
+            }
+            return l.loanId;
+        }
+    }
+
+    public Loan findById(int loanId) throws SQLException {
+        try (Connection c = DBConnection.get();
+             PreparedStatement ps = c.prepareStatement(SELECT_JOINED + "WHERE l.loan_id=?")) {
+            ps.setInt(1, loanId);
+            try (ResultSet rs = ps.executeQuery()) { return rs.next() ? map(rs) : null; }
+        }
+    }
+
+    public List<Loan> findAll() throws SQLException {
+        List<Loan> list = new ArrayList<>();
+        try (Connection c = DBConnection.get();
+             PreparedStatement ps = c.prepareStatement(SELECT_JOINED + "ORDER BY l.loan_id");
+             ResultSet rs = ps.executeQuery()) {
+            while (rs.next()) list.add(map(rs));
+        }
+        return list;
+    }
+
+    public List<Loan> findByUser(int userId) throws SQLException {
+        List<Loan> list = new ArrayList<>();
+        try (Connection c = DBConnection.get();
+             PreparedStatement ps = c.prepareStatement(SELECT_JOINED + "WHERE l.user_id=? ORDER BY l.loan_id")) {
+            ps.setInt(1, userId);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) list.add(map(rs));
+            }
+        }
+        return list;
+    }
+
+    /** Approve: stores EMI figures too. */
+    public void approve(int loanId, double emi, double totalInterest, double totalPayable) throws SQLException {
+        String sql = "UPDATE loans SET status=?, remarks=NULL, emi_amount=?, total_interest=?, total_payable=? WHERE loan_id=?";
+        try (Connection c = DBConnection.get(); PreparedStatement ps = c.prepareStatement(sql)) {
+            ps.setString(1, Loan.APPROVED);
+            ps.setDouble(2, emi);
+            ps.setDouble(3, totalInterest);
+            ps.setDouble(4, totalPayable);
+            ps.setInt(5, loanId);
+            ps.executeUpdate();
+        }
+    }
+
+    /** Reject / needs more info: stores the reason in remarks. */
+    public void updateStatus(int loanId, String status, String remarks) throws SQLException {
+        try (Connection c = DBConnection.get();
+             PreparedStatement ps = c.prepareStatement("UPDATE loans SET status=?, remarks=? WHERE loan_id=?")) {
+            ps.setString(1, status);
+            ps.setString(2, remarks);
+            ps.setInt(3, loanId);
+            ps.executeUpdate();
+        }
+    }
+}
