@@ -1,0 +1,59 @@
+package com.sit.loan.service;
+
+import com.sit.loan.dao.UserDao;
+import com.sit.loan.model.User;
+import com.sit.loan.util.PasswordUtil;
+
+import java.sql.SQLException;
+
+public class AuthService {
+    public static final int MAX_ATTEMPTS = 3;
+
+    public enum Outcome { SUCCESS, NOT_FOUND, ACCOUNT_INACTIVE, WRONG_PASSWORD, LOCKED_NOW }
+
+    public static final class LoginResult {
+        public final Outcome outcome;
+        public final User user;
+        public final int attemptsLeft;
+
+        LoginResult(Outcome outcome, User user, int attemptsLeft) {
+            this.outcome = outcome;
+            this.user = user;
+            this.attemptsLeft = attemptsLeft;
+        }
+    }
+
+    private final UserDao userDao;
+
+    public AuthService(UserDao userDao) {
+        this.userDao = userDao;
+    }
+
+    /** Login with email or username. Failed-attempt tracking applies to ROLE_USER only. */
+    public LoginResult login(String identifier, String password) throws SQLException {
+        User u = userDao.findByUsernameOrEmail(identifier);
+        if (u == null) return new LoginResult(Outcome.NOT_FOUND, null, 0);
+
+        if (u.isAdmin()) {
+            return PasswordUtil.matches(password, u.password)
+                    ? new LoginResult(Outcome.SUCCESS, u, 0)
+                    : new LoginResult(Outcome.WRONG_PASSWORD, u, 0);
+        }
+
+        if (!u.isActive()) return new LoginResult(Outcome.ACCOUNT_INACTIVE, u, 0);
+
+        if (PasswordUtil.matches(password, u.password)) {
+            if (u.failedAttempts != 0) userDao.setFailedAttempts(u.id, 0);
+            u.failedAttempts = 0;
+            return new LoginResult(Outcome.SUCCESS, u, 0);
+        }
+
+        int attempts = u.failedAttempts + 1;
+        userDao.setFailedAttempts(u.id, attempts);
+        if (attempts >= MAX_ATTEMPTS) {
+            userDao.updateStatus(u.id, User.INACTIVE);
+            return new LoginResult(Outcome.LOCKED_NOW, u, 0);
+        }
+        return new LoginResult(Outcome.WRONG_PASSWORD, u, MAX_ATTEMPTS - attempts);
+    }
+}
