@@ -1,0 +1,48 @@
+package com.sit.loan.service;
+
+import com.sit.loan.util.AppConfig;
+import jakarta.mail.*;
+import jakarta.mail.internet.InternetAddress;
+import jakarta.mail.internet.MimeMessage;
+
+import java.util.Properties;
+
+/** Sends real emails over SMTP. Failures never crash the app; they are reported on the console. */
+public class EmailService {
+
+    public boolean send(String to, String subject, String body) {
+        String user = AppConfig.get("mail.username");
+        String pass = AppConfig.get("mail.password");
+        if (user.isEmpty() || user.equals("your_email@gmail.com") || pass.isEmpty() || pass.equals("your_app_password")) {
+            System.out.println("[WARN] Email NOT sent to " + to + ": SMTP is not configured in config.properties.");
+            return false;
+        }
+        Properties p = new Properties();
+        p.put("mail.smtp.auth", "true");
+        p.put("mail.smtp.starttls.enable", "true");
+        p.put("mail.smtp.host", AppConfig.get("mail.host"));
+        p.put("mail.smtp.port", AppConfig.get("mail.port"));
+        p.put("mail.smtp.connectiontimeout", "10000");
+        p.put("mail.smtp.timeout", "10000");
+        Session session = Session.getInstance(p, new Authenticator() {
+            @Override
+            protected PasswordAuthentication getPasswordAuthentication() {
+                return new PasswordAuthentication(user, pass);
+            }
+        });
+        try {
+            Message msg = new MimeMessage(session);
+            String from = AppConfig.get("mail.from");
+            msg.setFrom(new InternetAddress(from.isEmpty() ? user : from));
+            msg.setRecipients(Message.RecipientType.TO, InternetAddress.parse(to));
+            msg.setSubject(subject);
+            msg.setText(body);
+            Transport.send(msg);
+            System.out.println("[INFO] Email sent to " + to);
+            return true;
+        } catch (Exception e) {
+            System.out.println("[WARN] Email to " + to + " failed: " + e.getMessage());
+            return false;
+        }
+    }
+}
