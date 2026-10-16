@@ -1,0 +1,199 @@
+package com.sit.loan.ui;
+
+import com.sit.loan.dao.AuditDao;
+import com.sit.loan.dao.LoanDao;
+import com.sit.loan.dao.UserDao;
+import com.sit.loan.model.User;
+import com.sit.loan.service.*;
+import com.sit.loan.util.Input;
+import com.sit.loan.util.PasswordUtil;
+import com.sit.loan.util.Validator;
+
+import java.sql.SQLException;
+
+/** Entry point: the guest menu (register, login, forgot password, CIBIL check). */
+public class App {
+
+    private final UserDao userDao = new UserDao();
+    private final LoanDao loanDao = new LoanDao();
+    private final AuditDao auditDao = new AuditDao();
+    private final EmailService emailService = new EmailService();
+    private final CibilService cibilService = new CibilService();
+    private final CredentialGenerator credentialGenerator = new CredentialGenerator();
+    private final AuthService authService = new AuthService(userDao);
+    private final UserSession userSession = new UserSession(userDao, loanDao, cibilService);
+    private final AdminSession adminSession = new AdminSession(userDao, loanDao, auditDao, emailService);
+
+    public static void main(String[] args) {
+        try {
+            new App().run();
+        } catch (com.sit.loan.util.Input.InputClosedException e) {
+            System.out.println("\nInput closed. Goodbye!");
+        }
+    }
+
+    private void run() {
+        System.out.println("=========================================");
+        System.out.println("      LOAN APPLICATION SYSTEM");
+        System.out.println("=========================================");
+        while (true) {
+            System.out.println("\n----- MAIN MENU -----");
+            System.out.println("1. Register");
+            System.out.println("2. Login");
+            System.out.println("3. Forgot Password");
+            System.out.println("4. New Customer: CIBIL Score Check (auto-generated login)");
+            System.out.println("5. Exit");
+            int choice = Input.choice("Enter choice: ", 1, 5);
+            try {
+                switch (choice) {
+                    case 1: register(); break;
+                    case 2: login(); break;
+                    case 3: forgotPassword(); break;
+                    case 4: cibilCheck(); break;
+                    default:
+                        System.out.println("Thank you for using the Loan Application System. Goodbye!");
+                        return;
+                }
+            } catch (SQLException e) {
+                System.out.println("[ERROR] Database problem: " + e.getMessage());
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- Stage 1: register
+    private void register() throws SQLException {
+        System.out.println("\n----- USER REGISTRATION -----");
+        User u = new User();
+        u.fname = Input.validated("First name: ", Validator::isName, "First name must contain only letters.");
+        u.lname = Input.validated("Last name: ", Validator::isName, "Last name must contain only letters.");
+        u.mobile = Input.validated("Mobile number (10 digits): ", Validator::isMobile, "Mobile number must be exactly 10 digits.");
+        while (true) {
+            u.email = Input.validated("Email: ", Validator::isEmail, "Invalid email format.");
+            if (!userDao.emailExists(u.email, 0)) break;
+            System.out.println("  This email is already registered.");
+        }
+        u.location = Input.required("Location: ");
+        while (true) {
+            u.username = Input.validated("Username: ", Validator::isUsername,
+                    "Username must be 3-30 characters (letters, digits, . _ -).");
+            if (!userDao.usernameExists(u.username)) break;
+            System.out.println("  Username already taken. Please choose another.");
+        }
+        String plain = Input.validated("Password: ", Validator::isStrongPassword, Validator.PASSWORD_RULE);
+        u.password = PasswordUtil.hash(plain);
+        u.status = User.ACTIVE;
+        userDao.insert(u);
+        System.out.println("Registration successful! You can now log in as " + u.username + ".");
+    }
+
+    // ---------------------------------------------------------------- Stage 1 + 2: login
+    private void login() throws SQLException {
+        System.out.println("\n----- LOGIN -----");
+        String id = Input.required("Email or username: ");
+        String pw = Input.required("Password: ");
+        AuthService.LoginResult r = authService.login(id, pw);
+        switch (r.outcome) {
+            case NOT_FOUND:
+                System.out.println("User does not exist. Please check your email/username or register.");
+                break;
+            case ACCOUNT_INACTIVE:
+                System.out.println("Your account is inactive/locked. Please contact support.");
+                break;
+            case WRONG_PASSWORD:
+                if (r.user.isAdmin()) {
+                    System.out.println("Invalid credentials.");
+                } else {
+                    System.out.println("Invalid password. Attempts remaining before your account is locked: " + r.attemptsLeft);
+                }
+                break;
+            case LOCKED_NOW:
+                System.out.println("Invalid password. Your account has been LOCKED after 3 failed attempts. "
+                        + "Please contact support.");
+                break;
+            case SUCCESS:
+                System.out.println("\nWelcome " + r.user.fname + " " + r.user.lname);
+                if (r.user.isAdmin()) adminSession.run(r.user); else userSession.run(r.user);
+                break;
+        }
+    }
+
+    // ---------------------------------------------------------------- Stage 1: forgot password
+    private void forgotPassword() throws SQLException {
+        System.out.println("\n----- FORGOT PASSWORD -----");
+        String id = Input.required("Registered email or username: ");
+        User u = userDao.findByUsernameOrEmail(id);
+        if (u == null) {
+            System.out.println("No account found for that email/username.");
+            return;
+        }
+        if (u.isAdmin()) {
+            System.out.println("Admin passwords cannot be reset from here.");
+            return;
+        }
+        System.out.println("Account verified: " + u.fname + " " + u.lname);
+        String pw1 = Input.validated("New password: ", Validator::isStrongPassword, Validator.PASSWORD_RULE);
+        String pw2 = Input.required("Confirm new password: ");
+        if (!pw1.equals(pw2)) {
+            System.out.println("Passwords do not match. Password was not changed.");
+            return;
+        }
+        userDao.updatePassword(u.id, PasswordUtil.hash(pw1));
+        System.out.println("Password reset successfully. You can now log in.");
+        if (!u.isActive()) {
+            System.out.println("Note: your account is still inactive. Please contact support to unlock it.");
+        }
+    }
+
+    // ---------------------------------------------------------------- Stage 4: CIBIL check + auto credentials
+    private void cibilCheck() throws SQLException {
+        System.out.println("\n----- CIBIL SCORE CHECK -----");
+        User u = new User();
+        u.fname = Input.validated("First name: ", Validator::isName, "First name must contain only letters.");
+        u.lname = Input.validated("Last name: ", Validator::isName, "Last name must contain only letters.");
+        u.mobile = Input.validated("Mobile number (10 digits): ", Validator::isMobile, "Mobile number must be exactly 10 digits.");
+        while (true) {
+            u.email = Input.validated("Email: ", Validator::isEmail, "Invalid email format.");
+            if (!userDao.emailExists(u.email, 0)) break;
+            System.out.println("  This email is already registered. Please log in instead.");
+            return;
+        }
+        u.location = Input.required("Location: ");
+        u.panCard = Input.validated("PAN card number: ", s -> Validator.isPan(s.toUpperCase()),
+                "Invalid PAN format. Please enter a valid PAN.").toUpperCase();
+
+        // username: first3(fname) + first3(lname) + last4(mobile); add a digit if it is already taken
+        String base = credentialGenerator.username(u.fname, u.lname, u.mobile);
+        String username = base;
+        int suffix = 1;
+        while (userDao.usernameExists(username)) username = base + (suffix++);
+        u.username = username;
+
+        String plainPassword = credentialGenerator.password();
+        u.password = PasswordUtil.hash(plainPassword);
+        u.status = User.ACTIVE;
+        userDao.insert(u);
+        System.out.println("Your account has been created. Username: " + u.username);
+
+        String body = "Dear " + u.fname + ",\n\nYour account for the Loan Application System has been created.\n\n"
+                + "Username: " + u.username + "\nPassword: " + plainPassword + "\n\n"
+                + "Please change your password after your first login (Main Menu > Forgot Password).\n\nRegards,\nLoan Application Team";
+        boolean sent = emailService.send(u.email, "Your Username and Password for Loan Application is", body);
+        if (!sent) {
+            System.out.println("Your credentials could not be emailed. Please note them down now:");
+            System.out.println("  Username: " + u.username);
+            System.out.println("  Password: " + plainPassword);
+        }
+
+        // CIBIL is generated only AFTER credentials are created and the email has been sent
+        int score = cibilService.generateScore();
+        userDao.updatePanAndCibil(u.id, u.panCard, score);
+        u.cibilScore = score;
+        System.out.println("\nYour CIBIL score is: " + score);
+
+        System.out.println("\n1. Apply for Loan");
+        System.out.println("2. Back to main menu");
+        if (Input.choice("Enter choice: ", 1, 2) == 1) {
+            userSession.applyForLoan(u);
+        }
+    }
+}
