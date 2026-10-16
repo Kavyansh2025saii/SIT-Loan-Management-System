@@ -1,0 +1,141 @@
+package com.sit.loan.ui;
+
+import com.sit.loan.dao.LoanDao;
+import com.sit.loan.dao.UserDao;
+import com.sit.loan.model.Loan;
+import com.sit.loan.model.LoanType;
+import com.sit.loan.model.User;
+import com.sit.loan.service.CibilService;
+import com.sit.loan.util.Input;
+import com.sit.loan.util.Validator;
+
+import java.sql.SQLException;
+import java.util.List;
+
+/** Menu shown to a logged-in ROLE_USER. */
+public class UserSession {
+    private final UserDao userDao;
+    private final LoanDao loanDao;
+    private final CibilService cibilService;
+
+    public UserSession(UserDao userDao, LoanDao loanDao, CibilService cibilService) {
+        this.userDao = userDao;
+        this.loanDao = loanDao;
+        this.cibilService = cibilService;
+    }
+
+    public void run(User user) {
+        while (true) {
+            System.out.println("\n----- USER MENU -----");
+            System.out.println("Welcome, " + user.fname + " " + user.lname);
+            System.out.println("1. Apply for Loan");
+            System.out.println("2. My Loan Applications");
+            System.out.println("3. Check CIBIL Score & Interest Rate");
+            System.out.println("4. Logout");
+            int choice = Input.choice("Enter choice: ", 1, 4);
+            try {
+                switch (choice) {
+                    case 1: applyForLoan(user); break;
+                    case 2: myLoans(user); break;
+                    case 3: interestRateCalculator(user); break;
+                    default:
+                        System.out.println("You have been logged out.");
+                        return;
+                }
+            } catch (SQLException e) {
+                System.out.println("[ERROR] Database problem: " + e.getMessage());
+            }
+        }
+    }
+
+    /** Makes sure the user has a PAN + CIBIL score on file; asks for PAN and generates one if not. */
+    private void ensureCibil(User user) throws SQLException {
+        if (user.cibilScore != null) return;
+        System.out.println("We need your PAN to generate your CIBIL score.");
+        String pan = Input.validated("PAN card number: ", s -> Validator.isPan(s.toUpperCase()),
+                "Invalid PAN format. Please enter a valid PAN.").toUpperCase();
+        int score = cibilService.generateScore();
+        userDao.updatePanAndCibil(user.id, pan, score);
+        user.panCard = pan;
+        user.cibilScore = score;
+        System.out.println("Your CIBIL score is: " + score);
+    }
+
+    // ---------------------------------------------------------------- Stage 3: apply
+    public void applyForLoan(User user) throws SQLException {
+        System.out.println("\n----- LOAN APPLICATION -----");
+        ensureCibil(user);
+
+        double amount = Input.positiveDouble("Loan amount: ", "Loan amount");
+        LoanType type = chooseLoanType();
+        int months = Input.positiveInt("Loan duration (in months): ", "Loan duration");
+        double income = Input.positiveDouble("Annual income: ", "Annual income");
+        String purpose = Input.required("Purpose of loan: ");
+
+        double rate = cibilService.interestRate(type, user.cibilScore);
+        System.out.printf("%nCIBIL score %d -> interest rate for %s: %.2f%% p.a.%n", user.cibilScore, type.label, rate);
+
+        if (!Input.confirm("Submit this application?")) {
+            System.out.println("Application cancelled.");
+            return;
+        }
+
+        Loan loan = new Loan();
+        loan.userId = user.id;
+        loan.loanAmount = amount;
+        loan.loanType = type.label;
+        loan.loanDuration = months;
+        loan.interestRate = rate;
+        loan.annualIncome = income;
+        loan.purpose = purpose;
+        loan.status = Loan.PENDING;
+        loanDao.insert(loan);
+        System.out.println("Your loan application (ID " + loan.loanId + ") has been submitted successfully. Status: Pending");
+    }
+
+    private LoanType chooseLoanType() {
+        System.out.println("Loan types:");
+        LoanType.printMenu();
+        while (true) {
+            LoanType t = LoanType.parse(Input.required("Select loan type (number or name): "));
+            if (t != null) return t;
+            System.out.println("  Invalid loan type selected.");
+        }
+    }
+
+    private void myLoans(User user) throws SQLException {
+        List<Loan> loans = loanDao.findByUser(user.id);
+        if (loans.isEmpty()) {
+            System.out.println("You have not applied for any loans yet.");
+            return;
+        }
+        System.out.printf("%n%-6s %-16s %-14s %-9s %-8s %-17s %s%n",
+                "ID", "Type", "Amount", "Months", "Rate%", "Status", "EMI");
+        for (Loan l : loans) {
+            System.out.printf("%-6d %-16s %-14.2f %-9d %-8.2f %-17s %s%n", l.loanId, l.loanType, l.loanAmount,
+                    l.loanDuration, l.interestRate, l.status, l.emiAmount == null ? "-" : String.format("%.2f", l.emiAmount));
+            if (l.remarks != null && !l.remarks.isEmpty()) System.out.println("       Note: " + l.remarks);
+        }
+    }
+
+    // ---------------------------------------------------------------- Stage 4: PAN + loan type -> interest rate
+    private void interestRateCalculator(User user) throws SQLException {
+        System.out.println("\n----- INTEREST RATE CALCULATOR -----");
+        String pan = Input.validated("PAN card number: ", s -> Validator.isPan(s.toUpperCase()),
+                "Invalid PAN format. Please enter a valid PAN.").toUpperCase();
+        LoanType type = chooseLoanType();
+
+        int score;
+        if (user.cibilScore != null && pan.equals(user.panCard)) {
+            score = user.cibilScore;                      // same PAN: keep the stored score
+        } else {
+            score = cibilService.generateScore();
+            userDao.updatePanAndCibil(user.id, pan, score);
+            user.panCard = pan;
+            user.cibilScore = score;
+        }
+        double rate = cibilService.interestRate(type, score);
+        System.out.printf("For PAN %s, with a CIBIL score of %d, the interest rate for %s is %.2f%%.%n",
+                pan, score, type.label, rate);
+    }
+}
