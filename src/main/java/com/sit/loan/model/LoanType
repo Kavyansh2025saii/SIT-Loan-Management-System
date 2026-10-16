@@ -1,0 +1,46 @@
+package com.sit.loan.model;
+
+public enum LoanType {
+    HOME("Home Loan", 6.5, 8.5),
+    PERSONAL("Personal Loan", 9.0, 12.0),
+    EDUCATION("Education Loan", 4.0, 6.0),
+    VEHICLE("Vehicle Loan", 7.0, 9.0);
+
+    public final String label;
+    public final double minRate;
+    public final double maxRate;
+
+    LoanType(String label, double minRate, double maxRate) {
+        this.label = label;
+        this.minRate = minRate;
+        this.maxRate = maxRate;
+    }
+
+    /** Accepts "1".."4", "Home Loan", "home", etc. Returns null when invalid. */
+    public static LoanType parse(String input) {
+        if (input == null) return null;
+        String s = input.trim();
+        try {
+            int n = Integer.parseInt(s);
+            if (n >= 1 && n <= values().length) return values()[n - 1];
+            return null;
+        } catch (NumberFormatException ignored) { }
+        for (LoanType t : values()) {
+            if (t.label.equalsIgnoreCase(s) || t.name().equalsIgnoreCase(s)
+                    || t.label.split(" ")[0].equalsIgnoreCase(s)) return t;
+        }
+        return null;
+    }
+
+    public static LoanType fromLabel(String label) {
+        for (LoanType t : values()) if (t.label.equalsIgnoreCase(label)) return t;
+        return null;
+    }
+
+    public static void printMenu() {
+        LoanType[] all = values();
+        for (int i = 0; i < all.length; i++) {
+            System.out.printf("  %d. %s (%.1f%% - %.1f%%)%n", i + 1, all[i].label, all[i].minRate, all[i].maxRate);
+        }
+    }
+}
