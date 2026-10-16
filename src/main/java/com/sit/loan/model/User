@@ -1,0 +1,29 @@
+package com.sit.loan.model;
+
+import java.sql.Timestamp;
+
+public class User {
+    public static final String ROLE_USER = "ROLE_USER";
+    public static final String ROLE_ADMIN = "ROLE_ADMIN";
+    public static final String ACTIVE = "Active";
+    public static final String INACTIVE = "Inactive";
+
+    public int id;
+    public String fname;
+    public String lname;
+    public String mobile;
+    public String email;
+    public String location;
+    public Timestamp lastModifiedDate;
+    public String status = ACTIVE;
+    public String username;
+    public String password;          // stored hash
+    public String role = ROLE_USER;
+    public int failedAttempts;
+    public String panCard;           // may be null
+    public Integer cibilScore;       // may be null
+
+    public String fullName() { return fname + " " + lname; }
+    public boolean isAdmin() { return ROLE_ADMIN.equals(role); }
+    public boolean isActive() { return ACTIVE.equalsIgnoreCase(status); }
+}
