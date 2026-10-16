@@ -1,0 +1,42 @@
+package com.sit.loan.service;
+
+import java.math.BigDecimal;
+import java.math.RoundingMode;
+
+public final class EmiCalculator {
+    private EmiCalculator() {}
+
+    public static final class Result {
+        public final double emi;
+        public final double totalInterest;
+        public final double totalPayable;
+
+        Result(double emi, double totalInterest, double totalPayable) {
+            this.emi = emi;
+            this.totalInterest = totalInterest;
+            this.totalPayable = totalPayable;
+        }
+    }
+
+    /**
+     * EMI = P * r * (1+r)^n / ((1+r)^n - 1), where r = annualRate / 12 / 100 and n = months.
+     */
+    public static Result calculate(double principal, double annualRatePercent, int months) {
+        double r = annualRatePercent / 12.0 / 100.0;
+        double emi;
+        if (r == 0) {
+            emi = principal / months;
+        } else {
+            double f = Math.pow(1 + r, months);
+            emi = principal * r * f / (f - 1);
+        }
+        double emiRounded = round2(emi);
+        double totalPayable = round2(emiRounded * months);
+        double totalInterest = round2(totalPayable - principal);
+        return new Result(emiRounded, totalInterest, totalPayable);
+    }
+
+    private static double round2(double v) {
+        return BigDecimal.valueOf(v).setScale(2, RoundingMode.HALF_UP).doubleValue();
+    }
+}
